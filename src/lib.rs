@@ -261,6 +261,12 @@ mod tests {
     mod serde {
         use super::{Alloc, Ptr, Size};
 
+        macro_rules! round_trip {
+            ($name:expr) => {
+                serde_json::from_str::<Alloc>(&serde_json::to_string($name).unwrap()).unwrap()
+            };
+        }
+
         #[test]
         fn alloc_free() {
             let small = Size(8);
@@ -269,22 +275,29 @@ mod tests {
             let mut alloc = Alloc::new(small + mid + large);
 
             let a = alloc.malloc(small).unwrap();
+            let mut alloc = round_trip!(&alloc);
             let b = alloc.malloc(mid).unwrap();
+            let mut alloc = round_trip!(&alloc);
             let c = alloc.malloc(large).unwrap();
+            let mut alloc = round_trip!(&alloc);
             assert_eq!(a, Ptr(0));
             assert_eq!(b, Ptr(8));
             assert_eq!(c, Ptr(24));
             assert!(alloc.malloc(small).is_none());
 
-            let mut alloc: Alloc =
-                serde_json::from_str(&serde_json::to_string(&alloc).unwrap()).unwrap();
+            let mut alloc = round_trip!(&alloc);
 
             alloc.free(a, small);
+            let mut alloc = round_trip!(&alloc);
             alloc.free(b, mid);
+            let mut alloc = round_trip!(&alloc);
 
             let a = alloc.malloc(small).unwrap();
+            let mut alloc = round_trip!(&alloc);
             let b1 = alloc.malloc(small).unwrap();
+            let mut alloc = round_trip!(&alloc);
             let b2 = alloc.malloc(small).unwrap();
+            let mut alloc = round_trip!(&alloc);
 
             assert!(alloc.malloc(small).is_none());
             assert_eq!(a, Ptr(0));
@@ -302,17 +315,22 @@ mod tests {
             let a = Ptr(0);
             let b = Ptr(8);
             alloc.mark_allocated(b, mid);
+            let mut alloc = round_trip!(&alloc);
             alloc.mark_allocated(a, small);
 
-            let mut alloc: Alloc =
-                serde_json::from_str(&serde_json::to_string(&alloc).unwrap()).unwrap();
+            let mut alloc = round_trip!(&alloc);
 
             alloc.free(a, small);
+            let mut alloc = round_trip!(&alloc);
             alloc.free(b, mid);
+            let mut alloc = round_trip!(&alloc);
             alloc.mark_allocated(Ptr(24), large);
+            let mut alloc = round_trip!(&alloc);
 
             let a = alloc.malloc(small).unwrap();
+            let mut alloc = round_trip!(&alloc);
             let b1 = alloc.malloc(small).unwrap();
+            let mut alloc = round_trip!(&alloc);
             let b2 = alloc.malloc(small).unwrap();
 
             assert_eq!(a, Ptr(0));
