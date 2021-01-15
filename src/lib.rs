@@ -1,3 +1,20 @@
+#![deny(missing_docs)]
+
+//! # `stupid-alloc`
+//!
+//! A very simple, serializable allocator, designed for external memory such as long-lived files
+//! or GPU buffers. It has approximately O(log(N)) allocation and deallocation where N is the
+//! fragmentation - i.e., the number of free spaces of any size. If you want to avoid
+//! fragmentation, you can align allocations to 8-word boundaries or run a compaction step.
+//!
+//! Since it is serializable when using the `serde` feature, if it is being used to allocate space
+//! in a file the allocation metadata can, too, can be stored directly in the file itself.
+//!
+//! Originally used to allocate and reuse space on the runtime stack for code compiled by
+//! [`lightbeam`][lightbeam].
+//!
+//! [lightbeam]: https://github.com/Vurich/wasmtime/blob/master/crates/lightbeam
+
 use std::{
     collections::{BTreeMap, HashSet},
     ops,
@@ -6,6 +23,8 @@ use std::{
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+/// A pointer into the allocated space. Does not carry its size with it,
+/// the size is implicit.
 #[derive(Default, PartialOrd, Ord, PartialEq, Eq, Hash, Debug, Copy, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Ptr(pub usize);
@@ -16,6 +35,7 @@ impl Ptr {
     }
 }
 
+/// The size of the whole allocatable area, or of a specific allocation.
 #[derive(Default, PartialOrd, Ord, PartialEq, Eq, Hash, Debug, Copy, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Size(pub usize);
@@ -36,6 +56,8 @@ impl ops::Sub for Size {
     }
 }
 
+/// The allocator itself. See documentation for individual functions for more information.
+/// The implementation is 100% safe Rust.
 #[derive(Debug, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Alloc {
@@ -45,6 +67,7 @@ pub struct Alloc {
 }
 
 impl Alloc {
+    /// Create a new allocator of the specified size.
     pub fn new(bytes: Size) -> Self {
         let mut out = Self::default();
         out.set_size(bytes);
@@ -52,8 +75,12 @@ impl Alloc {
         out
     }
 
+    /// Resize the maximum size of the allocatable space. This does _not_ free the newly-available space if
+    /// the new size is larger than the existing size. If you want to mark the space between the previous size
+    /// and the new size as free, you must manually call `free`.
     pub fn set_size(&mut self, size: Size) {
         use std::cmp::Ordering;
+
         match size.cmp(&self.size) {
             Ordering::Less => self.truncate(size),
             Ordering::Equal | Ordering::Greater => {}
@@ -62,6 +89,7 @@ impl Alloc {
         self.size = size;
     }
 
+    /// Return the size of the current maximum allocatable space.
     pub fn size(&self) -> Size {
         self.size
     }
@@ -70,6 +98,12 @@ impl Alloc {
         self.mark_allocated(Ptr(size.0), self.size - size);
     }
 
+    /// Explicitly mark an area as allocated. This is useful if, for example, part of the allocatable area
+    /// must be reserved for specific uses by the host application.
+    ///
+    /// This cannot cause undefined behavior in the `unsafe` sense, but it assumes that the space to be
+    /// marked allocated is currently free in its entirely, and it may panic or leave the allocator in an
+    /// unexpected state if this is not upheld.
     pub fn mark_allocated(&mut self, ptr: Ptr, size: Size) {
         use std::cmp::Ordering;
 
@@ -97,6 +131,7 @@ impl Alloc {
         }
     }
 
+    /// Return a pointer to a block of memory of the given size, or `None` if no such block exists.
     pub fn malloc(&mut self, size: Size) -> Option<Ptr> {
         use std::cmp::Ordering;
 
@@ -115,6 +150,9 @@ impl Alloc {
         Some(ptr)
     }
 
+    /// Mark this range as free. This assumes that the area is currently marked as allocated, but `ptr` does _not_
+    /// have to be returned by [Alloc::malloc]. It is entirely valid to allocate a larger area and then only free
+    /// a small section thereof.
     pub fn free(&mut self, ptr: Ptr, size: Size) {
         let prev_block = self
             .blocks_by_address
@@ -145,6 +183,7 @@ impl Alloc {
         }
     }
 
+    /// Checks whether the entirety of the supplied range is currently free.
     pub fn is_free(&self, ptr: Ptr, size: Size) -> bool {
         self.blocks_by_address
             .range(..=ptr)
@@ -153,6 +192,8 @@ impl Alloc {
             .unwrap_or(false)
     }
 
+    /// Returns the amount of space (not necessarily contiguous) between the start of the allocatable
+    /// area and the end of the last allocated block.
     pub fn used_size(&self) -> Size {
         if let Some((p, _)) = self
             .blocks_by_address
